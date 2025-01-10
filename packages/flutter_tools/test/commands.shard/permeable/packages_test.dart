@@ -23,7 +23,10 @@ import 'package:flutter_tools/src/cache.dart';
 import 'package:flutter_tools/src/commands/packages.dart';
 import 'package:flutter_tools/src/dart/pub.dart';
 import 'package:flutter_tools/src/globals.dart' as globals;
+import 'package:unified_analytics/unified_analytics.dart';
+import 'package:yaml/yaml.dart';
 
+import '../../integration.shard/test_utils.dart';
 import '../../src/common.dart';
 import '../../src/context.dart';
 import '../../src/fake_process_manager.dart';
@@ -40,9 +43,14 @@ void main() {
   Cache.disableLocking();
   group('packages get/upgrade', () {
     late Directory tempDir;
+    late FakeAnalytics fakeAnalytics;
 
     setUp(() {
       tempDir = globals.fs.systemTempDirectory.createTempSync('flutter_tools_packages_test.');
+      fakeAnalytics = getInitializedFakeAnalyticsInstance(
+        fs: MemoryFileSystem.test(),
+        fakeFlutterVersion: FakeFlutterVersion(),
+      );
     });
 
     tearDown(() {
@@ -212,14 +220,25 @@ void main() {
 
       expect(mockStdio.stdout.writes.map(utf8.decode),
         allOf(
-          contains(matches(RegExp(r'Resolving dependencies in .+flutter_project\.\.\.'))),
+          // The output of pub changed, adding backticks around the directory name.
+          // These regexes are tolerant of the backticks being present or absent.
+          contains(matches(RegExp(r'Resolving dependencies in .+flutter_project`?\.\.\.'))),
           contains(matches(RegExp(r'\+ flutter 0\.0\.0 from sdk flutter'))),
-          contains(matches(RegExp(r'Changed \d+ dependencies in .+flutter_project!'))),
+          contains(matches(RegExp(r'Changed \d+ dependencies in .+flutter_project`?!'))),
         ),
       );
 
       expectDependenciesResolved(projectPath);
       expectZeroPluginsInjected(projectPath);
+      expect(
+        analyticsTimingEventExists(
+          sentEvents: fakeAnalytics.sentEvents,
+          workflow: 'pub',
+          variableName: 'get',
+          label: 'success',
+        ),
+        true,
+      );
     }, overrides: <Type, Generator>{
       Stdio: () => mockStdio,
       Pub: () => Pub.test(
@@ -231,6 +250,7 @@ void main() {
         platform: globals.platform,
         stdio: mockStdio,
       ),
+      Analytics: () => fakeAnalytics,
     });
 
     testUsingContext('get --offline fetches packages', () async {
@@ -295,6 +315,68 @@ flutter:
         botDetector: globals.botDetector,
         platform: globals.platform,
       ),
+    });
+
+    testUsingContext('get fetches packages for a workspace', () async {
+      tempDir.childFile('pubspec.yaml').writeAsStringSync('''
+name: workspace
+environment:
+  sdk: ^3.5.0-0
+workspace:
+  - flutter_project
+''');
+      final String projectPath = await createProject(tempDir,
+        arguments: <String>['--no-pub', '--template=module']);
+      final File pubspecFile = fileSystem.file(
+        fileSystem.path.join(
+          projectPath,
+          'pubspec.yaml',
+        ),
+      );
+      final YamlMap pubspecYaml = loadYaml(pubspecFile.readAsStringSync()) as YamlMap;
+      final Map<String, Object?> pubspec = <String, Object?>{
+        ...pubspecYaml.value.cast<String, Object?>(),
+        'resolution': 'workspace',
+        'environment': <String, Object?>{
+          ...(pubspecYaml['environment'] as YamlMap).value.cast<String, Object?>(),
+          'sdk': '^3.5.0-0',
+        }
+      };
+      pubspecFile.writeAsStringSync(jsonEncode(pubspec));
+      await runCommandIn(projectPath, 'get');
+
+      expect(mockStdio.stdout.writes.map(utf8.decode),
+        allOf(
+          // The output of pub changed, adding backticks around the directory name.
+          // These regexes are tolerant of the backticks being present or absent.
+          contains(matches(RegExp(r'Resolving dependencies in .+' + RegExp.escape(tempDir.basename) + r'`?\.\.\.'))),
+          contains(matches(RegExp(r'\+ flutter 0\.0\.0 from sdk flutter'))),
+          contains(matches(RegExp(r'Changed \d+ dependencies in .+' + RegExp.escape(tempDir.basename) + r'`?!'))),
+        ),
+      );
+      expectDependenciesResolved(tempDir.path);
+      expectZeroPluginsInjected(projectPath);
+      expect(
+        analyticsTimingEventExists(
+          sentEvents: fakeAnalytics.sentEvents,
+          workflow: 'pub',
+          variableName: 'get',
+          label: 'success',
+        ),
+        true,
+      );
+    }, overrides: <Type, Generator>{
+      Stdio: () => mockStdio,
+      Pub: () => Pub.test(
+        fileSystem: globals.fs,
+        logger: globals.logger,
+        processManager: globals.processManager,
+        usage: globals.flutterUsage,
+        botDetector: globals.botDetector,
+        platform: globals.platform,
+        stdio: mockStdio,
+      ),
+      Analytics: () => fakeAnalytics,
     });
 
     testUsingContext('get generates normal files when l10n.yaml has synthetic-package: false', () async {
@@ -428,6 +510,7 @@ flutter:
             .eventData['packagesProjectModule'],
         true,
       );
+<<<<<<< HEAD
     }, overrides: <Type, Generator>{
       Stdio: () => mockStdio,
       Pub: () => Pub.test(
@@ -464,6 +547,8 @@ flutter:
             .eventData['packagesAndroidEmbeddingVersion'],
         'v1',
       );
+=======
+>>>>>>> 17025dd88227cd9532c33fa78f5250d548d87e9a
     }, overrides: <Type, Generator>{
       Stdio: () => mockStdio,
       Pub: () => Pub.test(
